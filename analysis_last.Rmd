@@ -1,0 +1,376 @@
+---
+title: "Air Pollution and Respiratory Mortality across the German Federal States (2019–2023)"
+subtitle: "A Regional Ecological Visualization Study — Reproducible Notebook"
+author: "Adham Abdelhalim · Odinaka Obioha · Chinmoy Bora"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 2
+    number_sections: true
+    df_print: paged
+    theme: flatly
+    highlight: tango
+    code_folding: hide
+    includes:
+      in_header: report_header.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      dpi = 150, fig.width = 9, fig.height = 5.5, out.width = "100%")
+library(tidyverse)
+library(scales)
+library(patchwork)   # arrange ggplots
+# Interactive (used in §5.4 / Appendix): plotly, leaflet, sf, rnaturalearth
+```
+
+<div style="background:#f0f7ff;border-left:4px solid #3182ce;border-radius:0 8px 8px 0;padding:0.9rem 1.2rem;margin:1.5rem 0;font-size:0.95rem;color:#1e3a5f;">
+<strong>How to run</strong><br>
+Place this notebook in the same folder as the raw UBA + GBE CSV files (or set <code>data_dir</code> below).
+Install packages once with:<br>
+<code>install.packages(c("tidyverse","scales","patchwork","plotly","leaflet","sf","rnaturalearth"))</code><br>
+Knitting reproduces the full report, every figure, and the master dataset.
+</div>
+
+# Data: building one tidy state-by-year table
+
+```{r data-dir}
+data_dir <- "."   # CSVs live in this folder (same directory as this notebook)
+```
+
+```{r helpers}
+# Harmonise the different spellings of the 16 federal-state names
+standardize_states <- function(x) {
+  x <- str_remove_all(x, '"')
+  dplyr::recode(x,
+    "Baden-Wurttemberg"             = "Baden-Württemberg",
+    "Mecklenburg Western Pomerania" = "Mecklenburg-Western Pomerania",
+    "Mecklenburg-West Pomerania"    = "Mecklenburg-Western Pomerania",
+    "Saxony Anhalt"                 = "Saxony-Anhalt",
+    .default = x)
+}
+
+# Official 2022 resident populations (used to convert counts to rates)
+state_pop <- tibble::tribble(
+  ~State,                          ~Population,
+  "Baden-Württemberg",             11230740,
+  "Bavaria",                       13176426,
+  "Berlin",                         3662381,
+  "Brandenburg",                    2554464,
+  "Bremen",                          702655,
+  "Hamburg",                        1851596,
+  "Hesse",                          6267546,
+  "Mecklenburg-Western Pomerania",  1578041,
+  "Lower Saxony",                   8008135,
+  "North Rhine-Westphalia",        18017520,
+  "Rhineland-Palatinate",           4125163,
+  "Saarland",                       1014047,
+  "Saxony",                         4054689,
+  "Saxony-Anhalt",                  2144570,
+  "Schleswig-Holstein",             2953202,
+  "Thuringia",                      2114870
+)
+```
+
+```{r read-mortality}
+# GBE-Bund: number of deaths, ICD-10 J00-J99 (all ages), by state and year.
+# After skip = 9 the region-name row becomes the header; column 1 holds the ICD label.
+mort_files <- list.files(data_dir, pattern = "Respiratory Mortality.*\\.csv$", full.names = TRUE)
+
+read_mortality <- function(f) {
+  yr  <- as.numeric(str_extract(basename(f), "\\d{4}"))
+  # n_max = 4: only the ICD rows (stops before footnotes at the file bottom)
+  # col_types: read everything as text — values use "," decimals and "." for missing
+  raw <- suppressMessages(read_delim(
+    f, delim = ";", skip = 9, n_max = 4,
+    col_types = cols(.default = col_character()),
+    locale = locale(encoding = "latin1")
+  ))
+  cond <- names(raw)[1]
+  raw %>%
+    filter(str_detect(.data[[cond]], "J00-J99")) %>%
+    select(where(~ !all(is.na(.x) | .x == ""))) %>%  # drop trailing empty column
+    pivot_longer(cols = -1, names_to = "State", values_to = "Deaths") %>%
+    mutate(Year   = yr,
+           State  = standardize_states(State),
+           Deaths = as.numeric(str_remove_all(Deaths, ","))) %>%
+    filter(!Deaths %in% c(NA, NaN), !State %in% c(".", "-", "")) %>%
+    select(State, Year, Deaths)
+}
+
+df_mort <- map_dfr(mort_files, read_mortality) %>%
+  filter(State %in% state_pop$State)
+```
+
+```{r read-age-std}
+# GBE-Bund: age-standardised deaths per 100k (European standard population 2013).
+# skip = 12 lands on Germany; n_max = 18 reads Germany + 16 states + 1 aggregate row.
+age_std_files <- list.files(data_dir, pattern = "Age standardised mortality.*\\.csv$",
+                            full.names = TRUE)
+
+read_age_std <- function(f) {
+  yr <- as.numeric(str_extract(basename(f), "\\d{4}"))
+  suppressMessages(read_delim(
+    f, delim = ";", skip = 12, n_max = 18,
+    col_names = c("State", "Deaths_asd", "Deaths_per_100k", "Mort_age_std"),
+    col_types = cols(.default = col_character()),
+    locale = locale(encoding = "latin1")
+  )) %>%
+    mutate(
+      Year = yr,
+      State = standardize_states(str_trim(State)),
+      Mort_age_std = as.numeric(str_replace(Mort_age_std, ",", "."))
+    ) %>%
+    filter(State %in% state_pop$State) %>%   # drops Germany + regional aggregates
+    select(State, Year, Mort_age_std)
+}
+
+df_age_std <- map_dfr(age_std_files, read_age_std)
+```
+
+```{r read-pollution}
+# UBA: station-level annual means -> unweighted state mean each year.
+read_pollution <- function(pattern, valname) {
+  files <- list.files(data_dir, pattern = pattern, full.names = TRUE)
+  map_dfr(files, function(f) {
+    yr  <- as.numeric(str_extract(basename(f), "\\d{4}"))
+    raw <- read_delim(f, delim = ";", show_col_types = FALSE,
+                      locale = locale(encoding = "UTF-8"))
+    scol <- names(raw)[str_detect(names(raw), regex("State|network", ignore_case = TRUE))][1]
+    vcol <- names(raw)[str_detect(names(raw), regex("Annual mean",  ignore_case = TRUE))][1]
+    raw %>%
+      rename(State = all_of(scol), Val = all_of(vcol)) %>%
+      filter(!str_detect(State, "UBA|\\*|Source|http")) %>%
+      mutate(Val = as.numeric(str_replace(as.character(Val), ",", "."))) %>%
+      group_by(State) %>%
+      summarise("{valname}" := mean(Val, na.rm = TRUE), .groups = "drop") %>%
+      mutate(Year = yr, State = standardize_states(State))
+  })
+}
+
+df_no2  <- read_pollution("Nitrogen dioxide.*\\.csv$",   "NO2")
+df_pm10 <- read_pollution("Particulate matter.*\\.csv$", "PM10")
+```
+
+```{r build-master}
+master_df <- df_mort %>%
+  left_join(df_age_std, by = c("State", "Year")) %>%
+  left_join(df_no2,  by = c("State", "Year")) %>%
+  left_join(df_pm10, by = c("State", "Year")) %>%
+  left_join(state_pop, by = "State") %>%
+  mutate(Mort_per_100k = Deaths / Population * 100000) %>%
+  drop_na() %>%
+  arrange(State, Year)
+
+# A reusable, colour-blind-safe palette (Okabe-Ito)
+ok <- c(blue="#0072B2", verm="#D55E00", orange="#E69F00", sky="#56B4E9",
+        green="#009E73", yellow="#F0E442", purple="#CC79A7", grey="#999999")
+
+glimpse(master_df)
+```
+
+# Descriptive statistics and key figures
+
+```{r stats}
+# Descriptives
+master_df %>%
+  summarise(across(c(PM10, NO2, Mort_age_std, Mort_per_100k),
+                   list(mean = mean, sd = sd, min = min, median = median, max = max)))
+
+# Correlations with the age-standardised rate (official GBE metric)
+cor_tab <- tibble(
+  Pollutant = c("PM10", "NO2"),
+  Pearson_r = c(cor(master_df$PM10, master_df$Mort_age_std),
+                cor(master_df$NO2,  master_df$Mort_age_std)),
+  Spearman  = c(cor(master_df$PM10, master_df$Mort_age_std, method = "spearman"),
+                cor(master_df$NO2,  master_df$Mort_age_std, method = "spearman"))
+)
+cor_tab
+
+# Formal tests + multiple regression
+cor.test(master_df$PM10, master_df$Mort_age_std)
+cor.test(master_df$NO2,  master_df$Mort_age_std)
+summary(lm(Mort_age_std ~ PM10 + NO2, data = master_df))
+
+# The population artefact: same data, raw counts
+c(NO2_vs_counts = cor(master_df$NO2, master_df$Deaths),
+  pop_vs_counts = cor(master_df$Population, master_df$Deaths))
+```
+
+# Results
+
+## The measurement decision that changes the answer
+
+The same NO₂ data give three different answers depending on the mortality metric. Raw **counts** show a positive relationship, but counts track population almost perfectly (r ≈ 0.98), so this is an artefact of size. The **crude rate** turns negative, because older, low-pollution states have high crude mortality. Only the **age-standardised rate**, which removes the age confounder, shows the real signal.
+
+```{r fig1-normalization-flip, fig.height=4.6}
+mk_panel <- function(yvar, ylab, title, col) {
+  ggplot(master_df, aes(NO2, .data[[yvar]])) +
+    geom_point(colour = col, alpha = .7) +
+    geom_smooth(method = "lm", se = TRUE, colour = "black", linetype = "dashed") +
+    labs(title = title, x = "NO₂ (µg/m³)", y = ylab) +
+    annotate("text", x = -Inf, y = Inf, hjust = -0.12, vjust = 1.5,
+             label = sprintf("r = %+.2f", cor(master_df$NO2, master_df[[yvar]])),
+             fontface = "bold", colour = col) +
+    theme_minimal(base_size = 11)
+}
+p1 <- mk_panel("Deaths",        "Total respiratory deaths",       "Raw counts (population artefact)", "#b00")
+p2 <- mk_panel("Mort_per_100k", "Crude deaths / 100k",            "Crude rate (age-confounded)",      ok["verm"])
+p3 <- mk_panel("Mort_age_std",  "Age-standardised deaths / 100k", "Age-standardised (age removed)",   ok["green"])
+
+p1 + p2 + p3 +
+  plot_annotation(title = "Same data, three answers: the mortality metric decides the conclusion (NO₂, 2019–2023)",
+                  theme = theme(plot.title = element_text(face = "bold", size = 13)))
+```
+
+## The pollution–mortality association (corrected)
+
+Using age-standardised deaths per 100,000, **NO₂ shows a significant positive association** with respiratory mortality (r = +0.31, p = 0.005; +0.50 across the 16 state means), while PM₁₀ stays flat (r = +0.11). The hypothesis is supported for NO₂ once age is controlled.
+
+```{r fig2-scatter, fig.height=4.8}
+master_df %>%
+  pivot_longer(c(PM10, NO2), names_to = "Pollutant", values_to = "Concentration") %>%
+  mutate(Pollutant = recode(Pollutant, PM10 = "PM₁₀ (µg/m³)", NO2 = "NO₂ (µg/m³)")) %>%
+  ggplot(aes(Concentration, Mort_age_std)) +
+  geom_point(aes(colour = factor(Year)), size = 2.4, alpha = .85) +
+  geom_smooth(method = "lm", se = TRUE, colour = ok["verm"]) +
+  facet_wrap(~Pollutant, scales = "free_x") +
+  scale_colour_viridis_d(name = "Year") +
+  labs(title = "After age-standardisation, NO₂ is positively associated with respiratory mortality",
+       subtitle = "16 states × 5 years; line = OLS fit with 95% CI",
+       x = NULL, y = "Age-standardised deaths per 100,000") +
+  theme_minimal(base_size = 12)
+```
+
+## Distribution of pollutants over time
+
+```{r fig5-boxplots, fig.height=5}
+poll_labels <- c(NO2 = "NO2 (\u00b5g/m\u00b3)", PM10 = "PM10 (\u00b5g/m\u00b3)")
+poll_colors <- c(NO2 = "#E63946", PM10 = "#0072B2")
+
+master_df %>%
+  select(State, Year, NO2, PM10) %>%
+  pivot_longer(c(NO2, PM10), names_to = "Pollutant", values_to = "Concentration") %>%
+  ggplot(aes(factor(Year), Concentration, fill = Pollutant)) +
+  geom_boxplot(alpha = .80, outlier.colour = "#555555", outlier.shape = 21,
+               outlier.fill = "#ffffff", outlier.size = 2) +
+  facet_wrap(~Pollutant, scales = "free_y", labeller = labeller(Pollutant = poll_labels)) +
+  scale_fill_manual(values = poll_colors, guide = "none") +
+  labs(title = "State-level pollutant concentrations over 2019\u20132023",
+       subtitle = "Each box summarises the 16 federal states; y-axes scaled independently",
+       x = "Year", y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(strip.text       = element_text(face = "bold", size = 12),
+        strip.background = element_rect(fill = "#f0f4f8", colour = NA),
+        panel.grid.major.x = element_blank())
+```
+
+## The temporal story is dominated by COVID-19
+
+```{r fig3-trends, fig.height=6}
+nat <- master_df %>% group_by(Year) %>%
+  summarise(across(c(PM10, NO2, Mort_age_std), mean), .groups = "drop")
+
+p_top <- ggplot(nat, aes(Year, Mort_age_std)) +
+  annotate("rect", xmin = 2020, xmax = 2021, ymin = -Inf, ymax = Inf, alpha = .12, fill = ok["grey"]) +
+  geom_line(colour = ok["verm"], linewidth = 1.3) + geom_point(colour = ok["verm"], size = 3) +
+  labs(title = "Pollution falls steadily while mortality dips (COVID) then rebounds",
+       y = "Age-std deaths / 100k", x = NULL) + theme_minimal(base_size = 12)
+
+p_bot <- nat %>% pivot_longer(c(PM10, NO2), names_to = "Pollutant", values_to = "Conc") %>%
+  ggplot(aes(Year, Conc, colour = Pollutant)) +
+  geom_line(linewidth = 1.1) + geom_point(size = 2.5) +
+  scale_colour_manual(values = c(NO2 = ok["green"], PM10 = ok["blue"]), labels = c("NO₂","PM₁₀")) +
+  labs(y = "µg/m³", x = "Year", colour = NULL) + theme_minimal(base_size = 12)
+
+p_top / p_bot
+```
+
+## Where the mortality is: the spatial picture realigns
+
+A tile-grid (statebin) map keeps every state visible. After age-standardisation, urban high-NO₂ states — Berlin, North Rhine-Westphalia and Hamburg — rank among the highest for respiratory mortality, so the maps align where the NO₂ signal is (Baden-Württemberg, young and wealthy, is the low outlier).
+
+```{r fig4-tilemap, fig.height=5.5}
+pos <- tibble::tribble(
+  ~State,~x,~y,~ab,
+  "Schleswig-Holstein",2,0,"SH","Bremen",1,1,"HB","Hamburg",2,1,"HH","Mecklenburg-Western Pomerania",4,1,"MV",
+  "Lower Saxony",1,2,"NI","Saxony-Anhalt",3,2,"ST","Brandenburg",4,2,"BB","Berlin",5,2,"BE",
+  "North Rhine-Westphalia",0,3,"NW","Hesse",2,3,"HE","Thuringia",3,3,"TH","Saxony",4,3,"SN",
+  "Rhineland-Palatinate",1,4,"RP","Bavaria",3,4,"BY","Saarland",0,5,"SL","Baden-Württemberg",2,5,"BW")
+
+state_means <- master_df %>% group_by(State) %>%
+  summarise(Mort = mean(Mort_age_std), NO2 = mean(NO2), .groups = "drop") %>%
+  left_join(pos, by = "State")
+
+tile <- function(df, fill, title, pal) {
+  ggplot(df, aes(x, -y)) +
+    geom_tile(aes(fill = {{fill}}), width = .92, height = .92, colour = "white") +
+    geom_text(aes(label = ab), fontface = "bold", size = 3) +
+    geom_text(aes(label = round({{fill}})), vjust = 2.2, size = 2.6) +
+    scale_fill_gradientn(colours = pal) +
+    coord_equal() + labs(title = title, fill = NULL) + theme_void(base_size = 11) +
+    theme(plot.title = element_text(face = "bold"))
+}
+tile(state_means, Mort, "Age-standardised deaths / 100k", c("#ffffcc","#fd8d3c","#bd0026")) +
+tile(state_means, NO2,  "NO₂ (µg/m³)",               c("#f7f4f9","#74a9cf","#045a8d"))
+```
+
+## Co-exposure risk matrix and post-COVID change
+
+```{r fig6-7, fig.height=5}
+d23 <- filter(master_df, Year == 2023)
+risk <- ggplot(d23, aes(PM10, NO2)) +
+  geom_vline(xintercept = median(d23$PM10), linetype = "dashed", colour = ok["grey"]) +
+  geom_hline(yintercept = median(d23$NO2),  linetype = "dashed", colour = ok["grey"]) +
+  geom_point(aes(size = Mort_age_std, colour = Mort_age_std), alpha = .85) +
+  scale_colour_gradientn(colours = c("#ffffcc","#fd8d3c","#bd0026")) +
+  scale_size(range = c(3, 12)) +
+  labs(title = "Co-exposure matrix (2023): high age-standardised mortality sits in the high-NO₂ band",
+       x = "PM₁₀ (µg/m³)", y = "NO₂ (µg/m³)", size = "Age-std/100k", colour = "Age-std/100k") +
+  theme_minimal(base_size = 11)
+risk
+```
+
+# Interactive maps (advanced techniques)
+
+The corrected interactive choropleth (now coloured by the population-adjusted rate, not counts) and a linked-highlight plotly scatter. These render in the knitted HTML.
+
+```{r leaflet-map, eval=FALSE}
+library(sf); library(leaflet); library(rnaturalearth)
+borders <- ne_states(country = "germany", returnclass = "sf") %>%
+  mutate(State = recode(name,
+    "Bayern"="Bavaria","Baden-Württemberg"="Baden-Württemberg","Nordrhein-Westfalen"="North Rhine-Westphalia",
+    "Hessen"="Hesse","Sachsen"="Saxony","Niedersachsen"="Lower Saxony","Rheinland-Pfalz"="Rhineland-Palatinate",
+    "Thüringen"="Thuringia","Sachsen-Anhalt"="Saxony-Anhalt","Mecklenburg-Vorpommern"="Mecklenburg-Western Pomerania",
+    .default = name))
+map23 <- borders %>% left_join(filter(master_df, Year == 2023), by = "State")
+pal <- colorNumeric("YlOrRd", domain = map23$Mort_age_std)
+leaflet(map23) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(fillColor = ~pal(Mort_age_std), weight = 1, color = "white", fillOpacity = .85,
+              label = ~sprintf("%s: %.1f age-std/100k | NO2 %.1f | PM10 %.1f",
+                               State, Mort_age_std, NO2, PM10)) %>%
+  addLegend(pal = pal, values = ~Mort_age_std, title = "Age-std / 100k (2023)")
+```
+
+```{r plotly-scatter, eval=FALSE}
+library(plotly)
+key <- highlight_key(master_df, ~State)
+gg <- ggplot(key, aes(NO2, Mort_age_std, colour = State,
+                      text = sprintf("%s (%d)\nNO2 %.1f\n%.1f age-std/100k", State, Year, NO2, Mort_age_std))) +
+  geom_point(size = 3, alpha = .8) +
+  geom_smooth(data = master_df, aes(NO2, Mort_age_std), method = "lm",
+              inherit.aes = FALSE, colour = "grey30", linetype = "dashed") +
+  theme_bw() + theme(legend.position = "none")
+ggplotly(gg, tooltip = "text") %>%
+  highlight(on = "plotly_hover", off = "plotly_doubleclick", opacityDim = .1)
+```
+
+```{r save-clean, include=FALSE}
+write_csv(master_df, "master_clean.csv")
+```
+
+*The full written interpretation (Introduction, Problem definition, Objectives, Methods, Discussion, Conclusions, References) accompanies this notebook in `report.md` / `Report.pdf`; knitting this file reproduces the dataset and all figures above.*

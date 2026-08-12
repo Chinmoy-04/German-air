@@ -1,0 +1,27 @@
+
+Number of deaths. Classification: years, region, age, sex, family status, ICD-10
+****************************************************************************************************
+
+Shown values refer to:
+Year:;2023
+Age:;All age-groups
+Sex:;Total
+Family status:;total;"Germany";"Baden-Wurttemberg";"Bavaria";"Berlin";"Brandenburg";"Bremen";"Hamburg";"Hesse";"Mecklenburg Western Pomerania";"Lower Saxony";"North Rhine-Westphalia";"Rhineland-Palatinate";"Saarland";"Saxony";"Saxony Anhalt";"Schleswig-Holstein";"Thuringia";"Former federal territory and East Berlin";"New federal states excluding East Berlin";
+"J00 Acute nasopharyngitis [common cold]";"36";"4";".";"-";"-";".";"3";".";"-";"-";"21";".";"-";".";"-";".";"-";"34";".";
+"J00-J06 Acute upper respiratory infections";"177";"30";"22";".";"7";".";"8";"5";".";"11";"48";"14";".";"13";"4";"6";"4";"148";"29";
+"J00-J99 Diseases of the respiratory system";"72,502";"8,107";"9,811";"3,050";"2,354";"610";"1,525";"5,071";"1,489";"8,339";"17,333";"3,665";"1,097";"3,083";"1,997";"2,737";"2,234";"61,345";"11,157";
+"J95-J99 Other diseases of the respiratory system";"1,587";"189";"260";"53";"43";"22";"50";"81";"53";"111";"425";"79";"13";"47";"30";"41";"90";"1,324";"263";
+
+****************************************************************************************************
+Footnotes
+****************************************************************************************************
+
+1.;Reporting year 2019: Two federal states published different data at the regional level for reasons of confidentiality.  Therefore there may be slight discrepancies between the regional publications and the data published here.
+2.;Bis zum Berichtsjahr 2016 wurde unter der Ausprägung Familienstand das Merkmal 'Ohne Angabe' geführt. Ab dem Berichtsjahr 2016 wurde das Merkmal in 'Sonstige' umbenannt und beinhaltet die folgenden Merkmalsausprägungen: Ehe aufgehoben, in Lebenspartnerschaft lebend, Lebenspartnerschaft verstorben, Lebenspartnerschaft aufgehoben, Lebenspartnerschaft aufgehoben Todeserklärung, nicht bekannt, Ehegatte tot erklärt, Ehegatte Todeszeit gerichtlich festgestellt, Ehe nichtig. 
+
+****************************************************************************************************
+Table was compiled on 21. May 2026 23:12 under www.gbe-bund.de
+****************************************************************************************************
+
+Source(s):
+Statistics on the causes of death, Federal Statistical Office

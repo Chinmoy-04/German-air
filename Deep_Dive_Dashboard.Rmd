@@ -1,0 +1,165 @@
+---
+title: "German Air Quality: Station-Level Deep Dive (2019–2023)"
+subtitle: "Interactive Dashboard — Reproducible Notebook"
+author: "Adham Abdelhalim · Odinaka Obioha · Chinmoy Bora"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: false
+    theme: flatly
+    includes:
+      in_header: report_header.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      dpi = 150, fig.retina = 2, fig.width = 9, fig.height = 5.5, out.width = "100%")
+library(dplyr)
+library(purrr)
+library(crosstalk)
+library(plotly)
+```
+
+```{r data-ingestion}
+valid_states <- c(
+  "Baden-Württemberg", "Bavaria", "Berlin", "Brandenburg", "Bremen",
+  "Hamburg", "Hesse", "Lower Saxony", "Mecklenburg-West Pomerania",
+  "North Rhine-Westphalia", "Rhineland-Palatinate", "Saarland",
+  "Saxony", "Saxony-Anhalt", "Schleswig-Holstein", "Thuringia"
+)
+
+pm10_files <- list.files(pattern = "Particulate matter_.*\\.csv")
+no2_files  <- list.files(pattern = "Nitrogen dioxide_.*\\.csv")
+
+pm10_data <- purrr::map_df(pm10_files, function(f) {
+  df <- read.csv(f, sep = ";", fileEncoding = "UTF-8", check.names = FALSE)
+  df <- df[, seq_len(7)]
+  names(df) <- c("State", "Station_Code", "Station_Name", "Setting", "Type",
+                 "PM10_Mean", "PM10_Exceedances")
+  df$Year <- as.character(sub(".*_([0-9]{4})\\.csv", "\\1", f))
+  df
+})
+
+no2_data <- purrr::map_df(no2_files, function(f) {
+  df <- read.csv(f, sep = ";", fileEncoding = "UTF-8", check.names = FALSE)
+  names(df) <- c("State", "Station_Code", "Station_Name", "Setting", "Type",
+                 "NO2_Mean", "NO2_Exceedances")
+  df$Year <- as.character(sub(".*_([0-9]{4})\\.csv", "\\1", f))
+  df
+})
+
+station_master <- pm10_data %>%
+  full_join(no2_data,
+            by = c("State", "Station_Code", "Station_Name", "Setting", "Type", "Year")) %>%
+  mutate(
+    PM10_Mean = as.numeric(gsub(",", ".", PM10_Mean)),
+    NO2_Mean  = as.numeric(gsub(",", ".", NO2_Mean))
+  ) %>%
+  filter(State %in% valid_states, Type != "",
+         !is.na(PM10_Mean), !is.na(NO2_Mean)) %>%
+  select(State, Station_Code, Station_Name, Setting,
+         Type, PM10_Mean, NO2_Mean, Year)
+```
+
+```{r shared-data}
+shared_station_data <- SharedData$new(
+  station_master,
+  key = ~paste0(Station_Code, "_", Year)
+)
+
+type_colors <- c(traffic = "#E63946", background = "#06B6D4", industry = "#F59E0B")
+```
+
+```{r filters}
+bscols(
+  widths = c(5, 7),
+  filter_select("state_filter", "Filter by State", shared_station_data, ~State),
+  filter_checkbox("year_filter", "Filter by Year", shared_station_data, ~Year, inline = TRUE)
+)
+
+htmltools::br()
+```
+
+<div style="background:#f0f7ff;border-left:4px solid #3182ce;border-radius:0 8px 8px 0;padding:0.85rem 1.15rem;margin:0 0 0.75rem;font-size:0.92rem;color:#1e3a5f;">
+<strong>Why this dashboard matters.</strong> The main report finds a positive NO₂–mortality link at state level once mortality is age-standardised. Here we drill down to individual UBA stations: filter by state and year, hover for exact PM10/NO2 readings, and brush the linked charts to see whether <em>traffic</em>, <em>background</em>, or <em>industry</em> sites drive co-exposure — helping explain where the NO₂ signal sits beneath the state averages.
+</div>
+
+<div style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;padding:0.85rem 1.15rem;margin:0 0 1.25rem;font-size:0.92rem;color:#78350f;">
+<strong>Note on industry stations:</strong> Orange <em>industry</em> points appear only where UBA reports an industry-type station with <strong>both</strong> PM10 and NO2 for that year. Several states have none (e.g. Bavaria, Berlin, Saxony); others may have PM10-only industry sites, which are excluded here.
+</div>
+
+```{r scatter-plot}
+scatter_plot <- plot_ly(
+  shared_station_data,
+  x = ~PM10_Mean, y = ~NO2_Mean,
+  color = ~Type, colors = type_colors,
+  type = "scatter", mode = "markers",
+  marker = list(size = 11, opacity = 0.85,
+                line = list(color = "#1a1a2e", width = 0.8)),
+  text = ~paste0(
+    "<b>", Station_Name, "</b><br>",
+    "State: ", State, "<br>",
+    "Type: ", Type, "  |  Setting: ", Setting, "<br>",
+    "PM10: <b>", round(PM10_Mean, 1), " µg/m³</b><br>",
+    "NO2: <b>",  round(NO2_Mean,  1), " µg/m³</b><br>",
+    "Year: ", Year
+  ),
+  hoverinfo = "text"
+) %>%
+  layout(
+    title = list(text = "Co-Exposure: PM10 vs NO2",
+                 font = list(size = 13, color = "#2d3748")),
+    xaxis = list(title = "PM10 Mean (µg/m³)", zeroline = FALSE, gridcolor = "#f0f0f0"),
+    yaxis = list(title = "NO2 Mean (µg/m³)",  zeroline = FALSE, gridcolor = "#f0f0f0"),
+    plot_bgcolor = "white", paper_bgcolor = "white",
+    legend = list(title = list(text = "<b>Station Type</b>"),
+                  bgcolor = "#f8fafc", bordercolor = "#e2e8f0", borderwidth = 1)
+  ) %>%
+  config(displayModeBar = FALSE) %>%
+  highlight(on = "plotly_selected", off = "plotly_doubleclick",
+            color = "black", opacityDim = 0.07)
+```
+
+```{r strip-plot}
+strip_plot <- plot_ly(
+  shared_station_data,
+  x         = ~Type,
+  y         = ~NO2_Mean,
+  color     = ~Type,
+  colors    = type_colors,
+  type      = "box",
+  boxpoints = "all",
+  jitter    = 0.45,
+  pointpos  = 0,
+  marker    = list(size = 5, opacity = 0.55,
+                   line = list(color = "#1a1a2e", width = 0.4)),
+  line      = list(width = 1.5),
+  fillcolor = list(alpha = 0.15),
+  text      = ~paste0(
+    "<b>", Station_Name, "</b><br>",
+    "State: ", State, "<br>",
+    "NO2: <b>", round(NO2_Mean, 1), " µg/m³</b><br>",
+    "Year: ", Year
+  ),
+  hoverinfo  = "text",
+  showlegend = FALSE
+) %>%
+  layout(
+    title = list(text = "NO2 Distribution by Station Type",
+                 font = list(size = 13, color = "#2d3748")),
+    xaxis = list(title = "", zeroline = FALSE,
+                 categoryorder = "array",
+                 categoryarray = c("traffic", "industry", "background")),
+    yaxis = list(title = "NO2 Mean (µg/m³)", zeroline = FALSE,
+                 gridcolor = "#f0f0f0"),
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  ) %>%
+  config(displayModeBar = FALSE) %>%
+  highlight(on = "plotly_selected", off = "plotly_doubleclick",
+            color = "black", opacityDim = 0.07)
+```
+
+```{r plot-row}
+bscols(widths = c(6, 6), scatter_plot, strip_plot)
+```

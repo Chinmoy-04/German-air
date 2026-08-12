@@ -1,0 +1,442 @@
+---
+title: "Interactive Plots"
+subtitle: "Linked Visualisations — Reproducible Notebook"
+author: "Adham Abdelhalim · Odinaka Obioha · Chinmoy Bora"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 2
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    code_folding: hide
+    includes:
+      in_header: report_header.html
+---
+    
+```{r load-data, include=FALSE}
+
+# This tells the knitter to grab the file you just saved
+master_df <- readRDS("master_df.rds")
+```
+
+# Interactive Risk Mapping
+
+```{r setup, include=FALSE}
+# Global settings for crisp rendering
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  dpi = 150,
+  fig.retina = 2,
+  fig.width = 9,
+  fig.height = 5.5,
+  out.width = "100%"
+)
+
+# Load our interactive arsenal
+library(tidyverse)
+library(plotly)          # For interactive charts 
+library(leaflet)         # For interactive maps
+library(sf)              # For spatial data (polygons/borders)
+library(rnaturalearth)   # For downloading German map boundaries
+library(scales)
+```
+
+
+
+### 1.1 Geographic Data Preparation
+
+Here we fetch the geospatial boundaries for Germany and merge them with our 2023 environmental dataset.
+
+```{r prep_map_data}
+# 1. Download the geographic borders of German states
+germany_borders <- ne_states(country = "germany", returnclass = "sf")
+
+# 2. Create a translation dictionary to match our master_df
+germany_borders <- germany_borders %>%
+  mutate(State = case_when(
+    name == "Bayern" ~ "Bavaria",
+    name == "Baden-Württemberg" ~ "Baden-Wurttemberg",
+    name == "Nordrhein-Westfalen" ~ "North Rhine-Westphalia",
+    name == "Hessen" ~ "Hesse",
+    name == "Sachsen" ~ "Saxony",
+    name == "Niedersachsen" ~ "Lower Saxony",
+    name == "Rheinland-Pfalz" ~ "Rhineland-Palatinate",
+    name == "Thüringen" ~ "Thuringia",
+    name == "Sachsen-Anhalt" ~ "Saxony Anhalt",
+    name == "Mecklenburg-Vorpommern" ~ "Mecklenburg Western Pomerania",
+    TRUE ~ name # Berlin, Bremen, Hamburg, Saarland, Schleswig-Holstein, Brandenburg match perfectly
+  ))
+
+# 3. Filter our master_df for 2023 and merge it onto the map shapes
+# (Note: Assuming 'master_df' is loaded in your environment from the previous session)
+map_data_2023 <- germany_borders %>%
+  left_join(filter(master_df, Year == 2023), by = "State")
+
+print("Map geometries and environmental data successfully merged!")
+```
+
+### 1.2 Interactive Environmental Risk Map (2023)
+
+```{r leaflet_map, fig.height=2, fig.width=9, out.width="100%", warning=FALSE, message=FALSE}
+# 1. Define a color palette (Yellow to Dark Red based on age-standardised mortality)
+color_pal <- colorNumeric(palette = "YlOrRd", domain = map_data_2023$Mort_age_std)
+
+# 2. Design the HTML hover tooltip
+hover_labels <- sprintf(
+  "<strong>%s</strong><br/>
+  Age-std deaths/100k: %.1f<br/>
+  PM10 Level: %g µg/m³<br/>
+  NO2 Level: %g µg/m³",
+  map_data_2023$State, 
+  map_data_2023$Mort_age_std, 
+  round(map_data_2023$PM10_Level, 1),
+  round(map_data_2023$NO2_Level, 1)
+) %>% lapply(htmltools::HTML)
+
+# 3. Build the Leaflet Map
+interactive_map <- leaflet(data = map_data_2023) %>%
+  # Add a clean, minimal base map (like Google Maps, but better for data)
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  # Add the state polygons
+  addPolygons(
+    fillColor = ~color_pal(Mort_age_std),
+    weight = 1.5,
+    opacity = 1,
+    color = "white", # White borders between states
+    fillOpacity = 0.8,
+    highlightOptions = highlightOptions(
+      weight = 4, 
+      color = "#666", 
+      fillOpacity = 1, 
+      bringToFront = TRUE
+    ),
+    label = hover_labels,
+    labelOptions = labelOptions(
+      style = list("font-weight" = "normal", padding = "8px 12px"),
+      textsize = "14px",
+      direction = "auto"
+    )
+  ) %>%
+  # Add the legend in the bottom right
+  addLegend(
+    pal = color_pal, 
+    values = ~Mort_age_std, 
+    opacity = 0.8, 
+    title = "2023 Age-std deaths/100k",
+    position = "bottomright"
+  )
+
+# Render!
+interactive_map
+```
+
+### Normalizing data
+```{r finalize-data-patch, message=FALSE, warning=FALSE}
+# master_df from 1.Rmd already includes official GBE age-standardised rates
+master_df <- readRDS("master_df.rds")
+
+head(master_df %>% select(State, Year, Mortality_Rate, Mort_age_std), 3)
+```
+
+
+###1.3 Interactive Correlation Scatter Plot
+```{r correlation-plot-interactive, message=FALSE, warning=FALSE, out.width="100%", fig.height=5}
+library(ggplot2)
+library(plotly)
+
+# 1. Transform the dataframe into a reactive object grouped by State
+linked_data <- highlight_key(master_df, ~State)
+
+# 2. PM10 Plot (Using the linked_data)
+gg_pm10 <- ggplot(linked_data, aes(x = PM10_Level, y = Mort_age_std, color = State)) +
+  geom_point(aes(text = sprintf("<b>%s (%d)</b><br>PM10: %.1f µg/m³<br>Age-std/100k: %.1f",
+                                State, Year, PM10_Level, Mort_age_std)),
+             size = 3, alpha = 0.8) +
+  # Note: We use the raw master_df for the trendline so it doesn't try to calculate a line for just the highlighted points
+  geom_smooth(data = master_df, aes(group = 1), method = "lm", color = "#444444", linetype = "dashed", linewidth = 1, se = FALSE) +
+  labs(x = "PM10 Concentration (µg/m³)", y = "Age-standardised deaths per 100,000") +
+  theme_bw() + 
+  theme(legend.position = "none", panel.grid.minor = element_blank())
+
+# 3. NO2 Plot (Using the linked_data)
+gg_no2 <- ggplot(linked_data, aes(x = NO2_Level, y = Mort_age_std, color = State)) +
+  geom_point(aes(text = sprintf("<b>%s (%d)</b><br>NO2: %.1f µg/m³<br>Age-std/100k: %.1f",
+                                State, Year, NO2_Level, Mort_age_std)),
+             size = 3, alpha = 0.8) +
+  geom_smooth(data = master_df, aes(group = 1), method = "lm", color = "#444444", linetype = "dashed", linewidth = 1, se = FALSE) +
+  labs(x = "NO2 Concentration (µg/m³)", y = "") + 
+  theme_bw() +
+  theme(legend.position = "none", panel.grid.minor = element_blank())
+
+# 4. Combine and enforce the highlight behavior
+subplot(ggplotly(gg_pm10, tooltip = "text"), 
+        ggplotly(gg_no2, tooltip = "text"), 
+        nrows = 1, titleX = TRUE, titleY = TRUE, margin = 0.08) %>%
+  layout(
+    title = list(text = "Pollutant Exposure vs. Age-Standardised Respiratory Mortality (Hover to group by state)",
+                 font = list(size = 14)),
+    showlegend = FALSE,
+    height = 480,
+    margin = list(l = 80, r = 30, t = 60, b = 20),
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  ) %>%
+  highlight(
+    on = "plotly_hover", 
+    off = "plotly_doubleclick", 
+    opacityDim = 0.1,
+    hoverinfo = "text"
+  ) %>%
+  config(displayModeBar = FALSE)
+```
+### Longitudinal trends
+
+```{r longitudinal-trends, message=FALSE, warning=FALSE, out.width="100%", fig.height=5}
+library(ggplot2)
+library(plotly)
+
+# 1. Establish the linked data structure mapped by State
+linked_time_data <- highlight_key(master_df, ~State)
+
+# 2. PM10 Longitudinal Trajectory Plot
+gg_ts_pm10 <- ggplot(linked_time_data, aes(x = Year, y = PM10_Level, color = State, group = State)) +
+  geom_line(linewidth = 1, alpha = 0.8) +
+  geom_point(aes(text = sprintf("<b>%s</b><br>Year: %d<br>PM10: %.1f µg/m³", 
+                                State, Year, PM10_Level)),
+             size = 2) +
+  scale_x_continuous(breaks = 2019:2023) + # Ensures crisp integer year ticks
+  labs(x = "Year", y = "PM10 Concentration (µg/m³)") +
+  theme_bw() +
+  theme(legend.position = "none", panel.grid.minor = element_blank())
+
+# 3. NO2 Longitudinal Trajectory Plot
+gg_ts_no2 <- ggplot(linked_time_data, aes(x = Year, y = NO2_Level, color = State, group = State)) +
+  geom_line(linewidth = 1, alpha = 0.8) +
+  geom_point(aes(text = sprintf("<b>%s</b><br>Year: %d<br>NO2: %.1f µg/m³", 
+                                State, Year, NO2_Level)),
+             size = 2) +
+  scale_x_continuous(breaks = 2019:2023) +
+  labs(x = "Year", y = "NO2 Concentration (µg/m³)") +
+  theme_bw() +
+  theme(legend.position = "none", panel.grid.minor = element_blank())
+
+# 4. Combine into an interconnected subplot
+subplot(ggplotly(gg_ts_pm10, tooltip = "text"), 
+        ggplotly(gg_ts_no2, tooltip = "text"), 
+        nrows = 1, titleX = TRUE, titleY = TRUE, margin = 0.08) %>%
+  layout(
+    title = list(text = "Longitudinal Air Pollution Trajectories across German States (2019–2023)",
+                 font = list(size = 14)),
+    showlegend = FALSE,
+    height = 480,
+    margin = list(l = 80, r = 30, t = 60, b = 20),
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  ) %>%
+  highlight(
+    on = "plotly_hover", 
+    off = "plotly_doubleclick", 
+    opacityDim = 0.1,               # Mutes non-targeted states to 10% opacity
+    hoverinfo = "text"
+  ) %>%
+  config(displayModeBar = FALSE)
+```
+### The Dumbbell Plot: 2019 vs. 2023 Shift(PM10)
+
+```{r dumbbell-plot, message=FALSE, warning=FALSE, out.width="100%", fig.height=6}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(plotly)
+
+# 1. Reshape the data
+dumbbell_data <- master_df %>%
+  filter(Year %in% c(2019, 2023)) %>%
+  select(State, Year, PM10_Level) %>%
+  pivot_wider(names_from = Year, values_from = PM10_Level, names_prefix = "Y") %>%
+  mutate(
+    Change = Y2023 - Y2019,
+    State = reorder(State, Change)
+  )
+
+# 2. Build the Directed Dumbbell Plot
+gg_dumbbell <- ggplot(dumbbell_data) +
+  # Draw the connecting baseline
+  geom_segment(aes(x = Y2019, xend = Y2023, y = State, yend = State), 
+               color = "gray80", linewidth = 1.5) +
+               
+  # THE UX FIX: Add a left-pointing arrow in the exact center of the bar
+  geom_text(aes(x = (Y2019 + Y2023) / 2, y = State, label = "←"), 
+            color = "gray40", size = 6, fontface = "bold") +
+            
+  # Draw the 2019 starting points (Orange)
+  geom_point(aes(x = Y2019, y = State, 
+                 text = sprintf("<b>%s</b><br>2019 PM10: %.1f µg/m³", State, Y2019)), 
+             color = "#fc8d62", size = 4, alpha = 0.9) +
+  # Draw the 2023 ending points (Blue)
+  geom_point(aes(x = Y2023, y = State, 
+                 text = sprintf("<b>%s</b><br>2023 PM10: %.1f µg/m³<br>Net Change: %+.1f µg/m³", State, Y2023, Change)), 
+             color = "#8da0cb", size = 4, alpha = 0.9) +
+  labs(x = "PM10 Concentration (µg/m³)", y = "", 
+       title = "Magnitude of Shift in PM10 Levels (2019 to 2023)") +
+  theme_bw() +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank() 
+  )
+
+# 3. Convert to interactive widget
+ggplotly(gg_dumbbell, tooltip = "text") %>%
+  layout(
+    height = 576,
+    margin = list(l = 170, r = 30, t = 60, b = 20),
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  ) %>%
+  config(displayModeBar = FALSE)
+```
+
+
+### The Dumbbell Plot: 2019 vs. 2023 Shift(NO2)
+```{r dumbbell-plot-no2, message=FALSE, warning=FALSE, out.width="100%", fig.height=6}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(plotly)
+
+# 1. Reshape the data for NO2 specifically
+dumbbell_data_no2 <- master_df %>%
+  filter(Year %in% c(2019, 2023)) %>%
+  select(State, Year, NO2_Level) %>%
+  pivot_wider(names_from = Year, values_from = NO2_Level, names_prefix = "Y") %>%
+  mutate(
+    Change = Y2023 - Y2019,
+    State = reorder(State, Change) # Sorts the Y-axis by the magnitude of change for NO2
+  )
+
+# 2. Build the Directed Dumbbell Plot for NO2
+gg_dumbbell_no2 <- ggplot(dumbbell_data_no2) +
+  # Draw the connecting baseline
+  geom_segment(aes(x = Y2019, xend = Y2023, y = State, yend = State), 
+               color = "gray80", linewidth = 1.5) +
+               
+  # THE UX FIX: Add the left-pointing arrow in the exact center of the bar
+  geom_text(aes(x = (Y2019 + Y2023) / 2, y = State, label = "←"), 
+            color = "gray40", size = 6, fontface = "bold") +
+            
+  # Draw the 2019 starting points (Orange to maintain visual consistency)
+  geom_point(aes(x = Y2019, y = State, 
+                 text = sprintf("<b>%s</b><br>2019 NO2: %.1f µg/m³", State, Y2019)), 
+             color = "#fc8d62", size = 4, alpha = 0.9) +
+  # Draw the 2023 ending points (Blue to maintain visual consistency)
+  geom_point(aes(x = Y2023, y = State, 
+                 text = sprintf("<b>%s</b><br>2023 NO2: %.1f µg/m³<br>Net Change: %+.1f µg/m³", State, Y2023, Change)), 
+             color = "#8da0cb", size = 4, alpha = 0.9) +
+  labs(x = "NO2 Concentration (µg/m³)", y = "", 
+       title = "Magnitude of Shift in NO2 Levels (2019 to 2023)") +
+  theme_bw() +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank() # Clean background
+  )
+
+# 3. Convert to interactive widget
+ggplotly(gg_dumbbell_no2, tooltip = "text") %>%
+  layout(
+    height = 576,
+    margin = list(l = 170, r = 30, t = 60, b = 20),
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white"
+  ) %>%
+  config(displayModeBar = FALSE)
+```
+
+
+###Risk Matrix (Quadrant Bubble Chart)
+```{r risk-matrix-2023-beautiful, message=FALSE, warning=FALSE, out.width="100%", fig.height=5.5}
+library(dplyr)
+library(ggplot2)
+library(plotly)
+
+# 1. Isolate 2023 and Calculate Medians
+data_2023 <- master_df %>% filter(Year == 2023)
+med_pm10 <- median(data_2023$PM10_Level, na.rm = TRUE)
+med_no2  <- median(data_2023$NO2_Level, na.rm = TRUE)
+
+# Calculate dynamic bounds to ensure the shading covers the whole top-right area
+max_pm10 <- max(data_2023$PM10_Level) + 2
+max_no2  <- max(data_2023$NO2_Level) + 2
+
+# 2. Categorize the data by Quadrant
+data_2023 <- data_2023 %>%
+  mutate(Risk_Category = case_when(
+    PM10_Level > med_pm10 & NO2_Level > med_no2 ~ "High Risk (Both)",
+    PM10_Level <= med_pm10 & NO2_Level <= med_no2 ~ "Low Risk (Both)",
+    TRUE ~ "Moderate Risk (Mixed)"
+  ))
+
+# 3. Build the Upgraded Bubble Chart
+gg_bubble <- ggplot(data_2023, aes(x = PM10_Level, y = NO2_Level)) +
+  
+  # THE FIX 1: Draw the red danger zone natively in ggplot2 so it cannot be hidden
+  annotate("rect", xmin = med_pm10, xmax = max_pm10, 
+           ymin = med_no2, ymax = max_no2, 
+           fill = "#e34a33", alpha = 0.08) +
+  
+  # The Crosshairs
+  geom_vline(xintercept = med_pm10, linetype = "dashed", color = "#888888", linewidth = 0.8) +
+  geom_hline(yintercept = med_no2, linetype = "dashed", color = "#888888", linewidth = 0.8) +
+  
+  # The Bubbles
+  geom_point(aes(size = Mort_age_std, 
+                 fill = Risk_Category, 
+                 text = sprintf("<b>%s</b><br>Category: %s<br>PM10: %.1f<br>NO2: %.1f<br>Age-std/100k: %.1f", 
+                                State, Risk_Category, PM10_Level, NO2_Level, Mort_age_std)),
+             alpha = 0.85, shape = 21, color = "white", stroke = 1.2) +
+  
+  # Color palette
+  scale_fill_manual(values = c("High Risk (Both)" = "#e34a33",     
+                               "Moderate Risk (Mixed)" = "#fec44f", 
+                               "Low Risk (Both)" = "#a1d99b")) +    
+  
+  # THE FIX 2: Explicitly name and format the size legend
+  scale_size_continuous(range = c(4, 16), name = "Age-std/100k") + 
+  
+  # Hide the redundant color legend, but keep the size legend
+  guides(fill = "none") +
+  
+  labs(
+    title = "Co-Exposure Risk Matrix: PM10 vs. NO2 (2023)",
+    x = paste0("PM10 Concentration (Median: ", round(med_pm10, 1), " µg/m³)"),
+    y = paste0("NO2 Concentration (Median: ", round(med_no2, 1), " µg/m³)")
+  ) +
+  theme_bw() +
+  theme(
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 14)
+    # We removed legend.position="none" here so the size guide can render
+  )
+
+# 4. Convert to interactive widget
+ggplotly(gg_bubble, tooltip = "text") %>%
+  layout(
+    height = 528,
+    plot_bgcolor  = "white",
+    paper_bgcolor = "white",
+    margin = list(l = 80, r = 30, t = 60, b = 20)
+  ) %>%
+  add_annotations(
+    x = max_pm10 - 0.5, y = max_no2 - 0.5,
+    text = "Danger Zone", showarrow = FALSE,
+    xanchor = "right", yanchor = "top", font = list(color = "#e34a33", size = 13, face = "bold")
+  ) %>%
+  config(displayModeBar = FALSE)
+```

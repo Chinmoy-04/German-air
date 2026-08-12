@@ -1,0 +1,310 @@
+---
+title: "Respiratory Risk & Air Pollution"
+subtitle: "State-Level Analysis — Reproducible Notebook"
+author: "Adham Abdelhalim · Odinaka Obioha · Chinmoy Bora"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 2
+    number_sections: true
+    df_print: paged
+    theme: flatly
+    highlight: tango
+    code_folding: hide
+    includes:
+      in_header: report_header.html
+editor_options: null
+chunk_output_type: inline
+---
+
+### 1.1 Environment Setup
+First, we load the core libraries required for data wrangling and advanced visualizations.
+
+```{r setup, message=FALSE, warning=FALSE}
+# Load core libraries
+library(tidyverse)  # Includes dplyr, purrr, tidyr, stringr, readr, ggplot2
+library(ggtext)     # For advanced text formatting in plots
+library(viridis)    # For colorblind-friendly palettes
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  dpi = 150,
+  fig.retina = 2,
+  fig.width = 9,
+  fig.height = 5.5,
+  out.width = "100%"
+)
+
+print("Libraries loaded successfully.")
+```
+### 1.2 File Targeting & Standardization
+Here, we scan the directory for our specific CSV files and create a helper function to ensure state names match perfectly across all datasets.
+
+```{r file_setup}
+# 1. Target the files using pattern matching (regex)
+mort_files     <- list.files(pattern = "Respiratory Mortality.*\\.csv$")
+age_std_files  <- list.files(pattern = "Age standardised mortality.*\\.csv$")
+no2_files      <- list.files(pattern = "Nitrogen dioxide.*\\.csv$")
+pm10_files     <- list.files(pattern = "Particulate matter.*\\.csv$")
+
+# 2. Create a helper function to fix spelling inconsistencies
+standardize_states <- function(data) {
+  data %>%
+    mutate(State = case_when(
+      str_detect(State, "Baden-W.rttemberg") ~ "Baden-Wurttemberg",
+      State == "Mecklenburg-West Pomerania" ~ "Mecklenburg Western Pomerania",
+      State == "Saxony-Anhalt" ~ "Saxony Anhalt",
+      TRUE ~ State
+    ))
+}
+
+# 3. Verify files found
+cat("Found", length(mort_files), "Mortality files\n")
+cat("Found", length(age_std_files), "Age-standardised mortality files\n")
+cat("Found", length(no2_files), "NO2 files\n")
+cat("Found", length(pm10_files), "PM10 files\n")
+```
+
+### 1.3 Process Mortality Data
+Here, we extract the year, pivot the states, fix data types, and split the data: saving the national total separately while filtering out non-state regional aggregates.
+
+```{r process_mortality, warning=FALSE}
+# 1. First, load everything into a temporary dataframe
+df_mortality_all <- map_dfr(mort_files, function(file) {
+  
+  yr <- as.numeric(str_extract(file, "\\d{4}"))
+  raw_df <- read_delim(file, delim = ";", skip = 9, show_col_types = FALSE)
+  condition_col <- names(raw_df)[1]
+  
+  raw_df %>%
+    filter(str_detect(!!sym(condition_col), "J00-J99")) %>%
+    pivot_longer(
+      cols = -1, 
+      names_to = "State", 
+      values_to = "Mortality_Rate",
+      values_transform = list(Mortality_Rate = as.character)
+    ) %>%
+    mutate(
+      Year = yr,
+      Mortality_Rate = as.numeric(str_replace_all(Mortality_Rate, ",", ""))
+    ) %>%
+    select(State, Year, Mortality_Rate)
+}) %>% 
+  standardize_states()
+
+# 2. Save the Germany national total separately for later use
+df_germany_total <- df_mortality_all %>%
+  filter(State == "Germany")
+
+# 3. Create the final clean dataset by dropping the junk rows and the Germany total
+df_mortality <- df_mortality_all %>%
+  filter(!State %in% c("Germany", "Former federal territory and East Berlin", 
+                       "New federal states excluding East Berlin", "...21"))
+
+# Verify the clean 16-state dataset
+print(df_mortality, n = 6)
+```
+
+### 1.3b Process Age-Standardised Mortality
+Official GBE age-standardised rates (European standard population 2013). Excludes Germany and the two regional aggregate rows.
+
+```{r process_age_std, warning=FALSE}
+df_age_std <- map_dfr(age_std_files, function(file) {
+  yr <- as.numeric(str_extract(file, "\\d{4}"))
+  suppressMessages(read_delim(
+    file, delim = ";", skip = 12, n_max = 18,
+    col_names = c("State", "Deaths_asd", "Deaths_per_100k", "Mort_age_std"),
+    col_types = cols(.default = col_character()),
+    locale = locale(encoding = "latin1")
+  )) %>%
+    mutate(
+      Year = yr,
+      State = str_trim(State),
+      Mort_age_std = as.numeric(str_replace(Mort_age_std, ",", "."))
+    ) %>%
+    filter(!State %in% c(
+      "Germany",
+      "Former federal territory and East Berlin",
+      "New federal states excluding East Berlin"
+    )) %>%
+    select(State, Year, Mort_age_std)
+}) %>%
+  standardize_states()
+
+print(df_age_std, n = 6)
+```
+### 1.4 Process Pollution Data & Merge
+Now we handle the NO2 and PM10 files using a unified helper function, and join everything into one final, tidy master dataset.
+
+```{r process_pollution_and_merge, warning=FALSE}
+# 1. Helper Function: Clean Pollution Data
+process_pollution <- function(files, value_name) {
+  map_dfr(files, function(file) {
+    yr <- as.numeric(str_extract(file, "\\d{4}"))
+    
+    # Read CSV, forcing column types to avoid parsing errors
+    raw_df <- read_delim(file, delim = ";", show_col_types = FALSE)
+    
+    # Identifying column names dynamically
+    state_col <- names(raw_df)[str_detect(names(raw_df), "(?i)State|network")]
+    val_col <- names(raw_df)[str_detect(names(raw_df), "(?i)Annual mean value")]
+    
+    raw_df %>%
+      rename(State = all_of(state_col), Mean_Value = all_of(val_col)) %>%
+      # Filter out 'UBA' and rows containing asterisks
+      filter(
+        !str_detect(State, "UBA"),
+        !str_detect(State, "\\*")
+      ) %>%
+      # Ensure numeric values (handling comma decimals)
+      mutate(Mean_Value = as.numeric(str_replace(Mean_Value, ",", "."))) %>%
+      group_by(State) %>%
+      summarize(!!value_name := mean(Mean_Value, na.rm = TRUE), .groups = "drop") %>%
+      mutate(Year = yr)
+  }) %>% standardize_states()
+}
+
+# 2. Process NO2 and PM10 files
+df_no2  <- process_pollution(no2_files, "NO2_Level")
+df_pm10 <- process_pollution(pm10_files, "PM10_Level")
+
+# 3. Merge into Tidy Master Dataframe
+master_df <- df_mortality %>%
+  left_join(df_age_std, by = c("State", "Year")) %>%
+  left_join(df_no2, by = c("State", "Year")) %>%
+  left_join(df_pm10, by = c("State", "Year")) %>%
+  drop_na()
+
+# Save for 2.Rmd interactive notebook
+saveRDS(master_df, "master_df.rds")
+
+# Display the first 6 rows of the final merged dataset
+head(master_df)
+```
+### 2.1 Plot 1: Longitudinal Trend Analysis
+Visualizing the 5-year respiratory mortality trend, isolating Bavaria to demonstrate localized severity.
+
+```{r plot_1_longitudinal, fig.width=9, fig.height=6}
+# Define our consultant-style theme
+theme_consultant <- theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    # ggtext allows us to use HTML/Markdown in the subtitle!
+    plot.subtitle = element_markdown(size = 12, color = "grey30", margin = margin(b = 10)),
+    panel.grid.minor = element_blank(),
+    legend.position = "none"
+  )
+
+# Generate Plot 1
+plot1 <- master_df %>%
+  mutate(
+    # Create highlighting logic for Bavaria
+    Highlight = ifelse(State == "Bavaria", "Bavaria", "Other"),
+    LineSize = ifelse(State == "Bavaria", 1.2, 0.6),
+    Alpha = ifelse(State == "Bavaria", 1, 0.4)
+  ) %>%
+  ggplot(aes(x = Year, y = Mort_age_std, group = State)) +
+  geom_line(aes(color = Highlight, size = LineSize, alpha = Alpha)) +
+  # Use a distinct, colorblind-friendly orange for Bavaria
+  scale_color_manual(values = c("Bavaria" = "#D55E00", "Other" = "grey70")) +
+  scale_size_identity() +
+  scale_alpha_identity() +
+  scale_x_continuous(breaks = 2019:2023) +
+  labs(
+    title = "Age-Standardised Respiratory Mortality Trends in Germany (2019-2023)",
+    subtitle = "Highlighting the <span style='color:#D55E00;'>**Bavarian**</span> trajectory against all other 15 federal states.",
+    x = "Year",
+    y = "Age-standardised deaths per 100,000"
+  ) +
+  theme_consultant
+
+# Display the plot
+plot1
+```
+### 2.2 Plot 2: Year-over-Year Correlation
+Here we use a faceted scatterplot to prove that the correlation between environmental pollutants and respiratory mortality remains consistent regardless of the year.
+
+```{r plot_2_scatter, warning=FALSE, message=FALSE}
+# Generate Plot 2
+plot2 <- master_df %>%
+  ggplot(aes(x = NO2_Level, y = Mort_age_std)) +
+  # Add scatter points colored by PM10
+  geom_point(aes(color = PM10_Level), alpha = 0.8, size = 2.5) +
+  # Add the linear regression trend line
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed", size = 0.8) +
+  # Apply the colorblind-friendly continuous palette
+  scale_color_viridis_c(option = "viridis", name = "PM10 Level (µg/m³)") +
+  # Split into 5 side-by-side plots based on the Year
+  facet_wrap(~Year, nrow = 1) +
+  labs(
+    title = "Impact of NO2 and PM10 on Respiratory Mortality",
+    subtitle = "Consistent linear correlation observed year-over-year.",
+    x = "Average NO2 Exposure (µg/m³)",
+    y = "Age-standardised deaths per 100,000"
+  ) +
+  theme_consultant +
+  theme(
+    strip.text = element_text(face = "bold", size = 12), # Make the year labels stand out
+    legend.key.width = unit(2, "cm")                     # Widen the legend for readability
+  )
+
+# Display the plot
+plot2
+```
+### 3.1 Distribution of Pollutants Over Time
+```{r plot_boxplot, fig.width=8, fig.height=5, warning=FALSE}
+# Pivot the pollutants into a longer format for side-by-side plotting
+plot_dist <- master_df %>%
+  select(State, Year, NO2_Level, PM10_Level) %>%
+  pivot_longer(cols = c(NO2_Level, PM10_Level), names_to = "Pollutant", values_to = "Concentration") %>%
+  ggplot(aes(x = factor(Year), y = Concentration, fill = Pollutant)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "red", outlier.size = 2) +
+  scale_fill_manual(
+    values = c("NO2_Level" = "#E69F00", "PM10_Level" = "#56B4E9"),
+    labels = c("NO2", "PM10")
+  ) +
+  labs(
+    title = "Variance in State-Level Pollutant Concentrations (2019-2023)",
+    x = "Year",
+    y = "Concentration (µg/m³)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom", legend.title = element_blank())
+
+plot_dist
+```
+### 3.2 Magnitude of Change: 2019 vs 2023
+```{r plot_dumbbell, fig.width=9, fig.height=7, warning=FALSE}
+plot_dumbbell <- master_df %>%
+  # Filter for only start and end years
+  filter(Year %in% c(2019, 2023)) %>%
+  select(State, Year, Mort_age_std) %>%
+  # Pivot wider to get 2019 and 2023 into their own columns
+  pivot_wider(names_from = Year, values_from = Mort_age_std, names_prefix = "Yr_") %>%
+  # Reorder states by their 2019 baseline for a cleaner visual hierarchy
+  ggplot(aes(y = reorder(State, Yr_2019))) +
+  # Draw the connecting line
+  geom_segment(aes(x = Yr_2019, xend = Yr_2023, yend = State), color = "grey70", linewidth = 1) +
+  # Add the start and end points
+  geom_point(aes(x = Yr_2019, color = "2019"), size = 3) +
+  geom_point(aes(x = Yr_2023, color = "2023"), size = 3) +
+  scale_color_manual(values = c("2019" = "#0072B2", "2023" = "#D55E00")) +
+  labs(
+    title = "Shift in Age-Standardised Respiratory Deaths (2019 vs. 2023)",
+    x = "Deaths per 100,000 (age-standardised)",
+    y = NULL,
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    legend.position = "top"
+  )
+
+plot_dumbbell
+```

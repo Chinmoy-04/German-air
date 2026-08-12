@@ -1,0 +1,19 @@
+# Local R render/run artifacts — regenerate from the .Rmd sources with
+# knitr/rmarkdown if needed, not tracked (large, and duplicate the .Rmd).
+*_run.R
+Report.html
+1.html
+2.html
+2.nb.html
+analysis.html
+analysis_final.html
+Deep_Dive_Dashboard.html
+Chart_Comparison.html
+
+# Agent working notes (session-internal, not part of the public project)
+decisions.md
+flow.md
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,47 @@
+
+Deaths, cases per 100,000 inhabitants (age-standardized) (from 1998). Classification: years, region, age, sex, nationality, ICD-10, type of standardization
+****************************************************************************************************
+
+Shown values refer to:
+Year:;2020
+Age:;All age-groups
+Sex:;Total
+Nationality:;All nationalities
+ICD10:;J00-J99 Diseases of the respiratory system
+Type of standardization:;Standard population of Europe 2013;"Deaths";"Deaths per 100,000 inhabitants";"Deaths per 100,000  inhabitants (age-standardised)";
+"        Germany";"61,348";"73.8";"63.1";
+"          Baden-Wurttemberg";"6,691";"60.3";"54.2";
+"          Bavaria";"8,578";"65.3";"59.5";
+"          Berlin";"2,601";"70.9";"70.1";
+"          Brandenburg";"2,015";"79.8";"60.1";
+"          Bremen";"515";"75.7";"66.5";
+"          Hamburg";"1,224";"66.2";"66.4";
+"          Hesse";"4,621";"73.5";"65.5";
+"          Mecklenburg Western Pomerania";"1,133";"70.4";"52.6";
+"          Lower Saxony";"7,074";"88.4";"74.6";
+"          North Rhine-Westphalia";"14,029";"78.2";"68.1";
+"          Rhineland-Palatinate";"3,140";"76.7";"64.5";
+"          Saarland";"879";"89.2";"69.2";
+"          Saxony";"2,841";"69.9";"49.3";
+"          Saxony Anhalt";"1,638";"74.9";"52.9";
+"          Schleswig-Holstein";"2,401";"82.6";"67.0";
+"          Thuringia";"1,968";"92.5";"67.9";
+"        Former federal territory and East Berlin";"51,753";"73.3";"64.7";
+"        New federal states excluding East Berlin";"9,595";"76.7";"55.6";
+
+****************************************************************************************************
+Footnotes
+****************************************************************************************************
+
+1.;Until 1997 deaths were recorded according to ICD-9. Therefore the numbers can be found in a separate ad hoc table (see links).
+2.;In September 2019 the age-standardized values for 2017 were corrected, so that deviations from previously displayed values are possible.
+3.;Reporting year 2019: Two federal states published different data at the regional level for reasons of confidentiality.  Therefore there may be slight discrepancies between the regional publications and the data published here.
+4.;Injuries and poisoning (ICD-10 Pos-Nr. S00-T98) are the consequences of external causes (ICD-10 Pos-no. V00-Y98) and therefore they may not be added to these.
+
+****************************************************************************************************
+Table was compiled on 2. Jul 2026 14:18 under www.gbe-bund.de
+****************************************************************************************************
+
+Source(s):
+Statistics on the causes of death, Federal Statistical Office
+Update of the state of the population, Federal Statistical Office
