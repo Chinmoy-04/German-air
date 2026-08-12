@@ -258,7 +258,8 @@ export function LineChart({
       ref={containerRef}
       style={{
         ...(aspectRatio ? { aspectRatio } : undefined),
-        touchAction: "none",
+        // pan-y (not none): reserve vertical swipes for native page scroll.
+        touchAction: "pan-y",
         ...style,
       }}
     >

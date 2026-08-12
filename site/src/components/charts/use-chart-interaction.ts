@@ -10,6 +10,10 @@ import { normalizeYAxisId } from "./y-axis-scales";
 type ScaleTime = ReturnType<typeof scaleTime<number>>;
 type ScaleLinear = ReturnType<typeof scaleLinear<number>>;
 
+// Minimum single-finger movement (px) before we commit to "this is a
+// horizontal scrub" vs. "this is a vertical page scroll".
+const TOUCH_DIRECTION_THRESHOLD_PX = 8;
+
 export interface ChartSelection {
   startX: number;
   endX: number;
@@ -74,6 +78,12 @@ export function useChartInteraction({
   const isDraggingRef = useRef(false);
   const dragStartXRef = useRef<number>(0);
   const lastHoveredXRef = useRef<number | null>(null);
+  // Direction lock for single-finger touch: until the gesture clearly moves
+  // more horizontally than vertically, we don't hijack it — this lets a
+  // vertical swipe that starts on the chart scroll the page normally instead
+  // of getting stuck scrubbing the tooltip (see TOUCH_DIRECTION_THRESHOLD_PX).
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const touchDirectionRef = useRef<"horizontal" | "vertical" | null>(null);
 
   const resolveTooltipFromX = useCallback(
     (pixelX: number): TooltipData | null => {
@@ -228,7 +238,12 @@ export function useChartInteraction({
   const handleTouchStart = useCallback(
     (event: React.TouchEvent<SVGGElement>) => {
       if (event.touches.length === 1) {
-        event.preventDefault();
+        // Don't preventDefault here — direction isn't known yet, and doing
+        // so would block the page from scrolling on a vertical swipe. Show
+        // the tooltip for a plain tap; a follow-up move decides direction.
+        const touch = event.touches[0]!;
+        touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+        touchDirectionRef.current = null;
         const chartX = getChartX(event, 0);
         if (chartX === null) {
           return;
@@ -271,7 +286,22 @@ export function useChartInteraction({
   const handleTouchMove = useCallback(
     (event: React.TouchEvent<SVGGElement>) => {
       if (event.touches.length === 1) {
-        event.preventDefault();
+        if (touchDirectionRef.current === null && touchStartRef.current) {
+          const touch = event.touches[0]!;
+          const dx = touch.clientX - touchStartRef.current.x;
+          const dy = touch.clientY - touchStartRef.current.y;
+          if (Math.max(Math.abs(dx), Math.abs(dy)) >= TOUCH_DIRECTION_THRESHOLD_PX) {
+            touchDirectionRef.current =
+              Math.abs(dx) > Math.abs(dy) ? "horizontal" : "vertical";
+          }
+        }
+        if (touchDirectionRef.current === "vertical") {
+          // Let the browser scroll the page — don't touch the tooltip.
+          return;
+        }
+        if (touchDirectionRef.current === "horizontal") {
+          event.preventDefault();
+        }
         const chartX = getChartX(event, 0);
         if (chartX === null) {
           return;
@@ -303,6 +333,8 @@ export function useChartInteraction({
   );
 
   const handleTouchEnd = useCallback(() => {
+    touchStartRef.current = null;
+    touchDirectionRef.current = null;
     clearTooltip();
     setSelection(null);
   }, [clearTooltip]);
@@ -338,7 +370,10 @@ export function useChartInteraction({
 
   const interactionStyle: React.CSSProperties = {
     cursor: canInteract ? "crosshair" : "default",
-    touchAction: "none",
+    // Reserve vertical swipes for native page scroll; only horizontal drags
+    // (the scrub gesture) are hijacked, and only once direction is confirmed
+    // in handleTouchMove above.
+    touchAction: "pan-y",
   };
 
   return {

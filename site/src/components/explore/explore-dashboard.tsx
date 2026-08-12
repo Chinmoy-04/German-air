@@ -111,7 +111,10 @@ function CoExposureScatter({ rows }: { rows: StationRow[] }) {
   const sample = rows.length > 400 ? rows.filter((_, i) => i % 2 === 0) : rows;
 
   return (
-    <div className="w-full overflow-x-auto overflow-y-hidden" data-lenis-prevent-touch>
+    <div
+      className="w-full touch-pan-x overflow-x-auto overflow-y-hidden"
+      data-lenis-prevent-touch
+    >
       <svg
         viewBox={`0 0 ${width} ${height}`}
         className="h-auto w-full min-w-[320px]"
@@ -242,7 +245,10 @@ function AssociationScatter({ rows }: { rows: MasterRow[] }) {
       : null;
 
   return (
-    <div className="w-full overflow-x-auto overflow-y-hidden" data-lenis-prevent-touch>
+    <div
+      className="w-full touch-pan-x overflow-x-auto overflow-y-hidden"
+      data-lenis-prevent-touch
+    >
       <svg
         viewBox={`0 0 ${width} ${height}`}
         className="h-auto w-full min-w-[320px]"
@@ -438,7 +444,10 @@ function StateHeatmap({ rows }: { rows: ReturnType<typeof stateMeans> }) {
   });
 
   return (
-    <div className="overflow-x-auto overflow-y-hidden" data-lenis-prevent-touch>
+    <div
+      className="touch-pan-x overflow-x-auto overflow-y-hidden"
+      data-lenis-prevent-touch
+    >
       <table className="w-full min-w-[560px] border-separate border-spacing-y-1 text-sm">
         <thead>
           <tr>

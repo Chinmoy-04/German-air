@@ -165,7 +165,7 @@ export function ScatterChart({
     <div
       className={cn("relative w-full", className)}
       ref={setContainerRef}
-      style={{ aspectRatio, touchAction: "none" }}
+      style={{ aspectRatio, touchAction: "pan-y" }}
     >
       {width > 0 && height > 0 ? (
         <ChartInner
