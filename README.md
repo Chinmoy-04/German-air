@@ -1,5 +1,7 @@
 # German Air
 
+**Live site: [german-air.vercel.app](https://german-air.vercel.app/)**
+
 Air quality (NO₂, PM₁₀) and age-standardised respiratory mortality across Germany's
 16 federal states, 2019–2023. The repo has two parts:
 
@@ -38,7 +40,7 @@ duplicate what the `.Rmd` sources already contain).
 
 ## Site
 
-The site is fully static — it reads pre-generated JSON (`site/src/data/*.json`)
+Live at [german-air.vercel.app](https://german-air.vercel.app/). The site is fully static — it reads pre-generated JSON (`site/src/data/*.json`)
 produced from `master_clean.csv` and the UBA tabulations by
 `site/scripts/prepare-data.py`. Deploys to Vercel with no environment
 variables and no build-time dependency on this repo's CSVs (the generated
