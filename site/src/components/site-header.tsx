@@ -7,6 +7,53 @@ import { motion, useScroll } from "motion/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Wind } from "lucide-react";
+import { useLenis } from "lenis/react";
+import { useEffect, useState } from "react";
+
+/**
+ * Scrollspy for the home page's two sections ("Story" = hero/thesis/preview,
+ * "Methods" = the `#methods` section). Mirrors the nav highlight to whichever
+ * one is actually in view instead of only reflecting the URL, since both
+ * live on the same route ("/").
+ */
+function useActiveSection(pathname: string) {
+  const [activeSection, setActiveSection] = useState<"story" | "methods">(
+    "story"
+  );
+
+  useEffect(() => {
+    if (pathname !== "/") {
+      return;
+    }
+    const methodsEl = document.getElementById("methods");
+    if (!methodsEl) {
+      return;
+    }
+    // Shrinks the observed viewport to the band just below the sticky
+    // header, in the upper ~60% of the screen — the section is considered
+    // "active" once it reaches that band, matching typical scrollspy feel.
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting || entry.boundingClientRect.top <= 0) {
+          setActiveSection("methods");
+        } else {
+          setActiveSection("story");
+        }
+      },
+      { rootMargin: "-64px 0px -40% 0px", threshold: 0 }
+    );
+    observer.observe(methodsEl);
+    return () => observer.disconnect();
+  }, [pathname]);
+
+  useEffect(() => {
+    if (pathname !== "/") {
+      setActiveSection("story");
+    }
+  }, [pathname]);
+
+  return activeSection;
+}
 
 /**
  * Thin progress hairline synced to Lenis's smoothed scroll position (Motion's
@@ -29,16 +76,24 @@ function ScrollProgress() {
 }
 
 const links = [
-  { href: "/", label: "Story", match: (path: string) => path === "/" },
+  {
+    href: "/",
+    label: "Story",
+    match: (path: string, section: "story" | "methods") =>
+      path === "/" && section === "story",
+  },
   {
     href: "/#methods",
     label: "Methods",
-    match: () => false,
+    match: (path: string, section: "story" | "methods") =>
+      path === "/" && section === "methods",
   },
 ];
 
 export function SiteHeader() {
   const pathname = usePathname();
+  const activeSection = useActiveSection(pathname);
+  const lenis = useLenis();
 
   return (
     <motion.header
@@ -64,9 +119,18 @@ export function SiteHeader() {
             <Link
               key={link.href}
               href={link.href}
+              onClick={(event) => {
+                // Already home and heading to the top-of-page tab: Next won't
+                // re-navigate to the same URL, so drive the scroll ourselves
+                // instead of leaving the click feeling like a dead click.
+                if (link.href === "/" && pathname === "/") {
+                  event.preventDefault();
+                  lenis?.scrollTo(0);
+                }
+              }}
               className={cn(
                 "rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground",
-                link.match(pathname) && "bg-muted text-foreground"
+                link.match(pathname, activeSection) && "bg-muted text-foreground"
               )}
             >
               {link.label}
